@@ -1,0 +1,7 @@
+node_modules/
+data/
+temp/
+storage/
+.env
+*.log
+.whatsapp/sessions/

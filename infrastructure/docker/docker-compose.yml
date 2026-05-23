@@ -1,0 +1,91 @@
+services:
+  # Vector DB para RAG
+  qdrant:
+    image: qdrant/qdrant:v1.8.0
+    container_name: aria_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis para sesiones y BullMQ
+  redis:
+    image: redis:7-alpine
+    container_name: aria_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # PostgreSQL para memoria episódica/semántica
+  postgres:
+    image: postgres:16-alpine
+    container_name: aria_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: aria_db
+      POSTGRES_USER: aria
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ariapass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/001_initial.sql:/docker-entrypoint-initdb.d/001_initial.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aria -d aria_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Neo4j para Knowledge Graph
+  neo4j:
+    image: neo4j:5-community
+    container_name: aria_neo4j
+    ports:
+      - "7687:7687"
+      - "7474:7474"
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-password}
+      NEO4J_dbms_memory_pagecache_size: 512M
+      NEO4J_dbms_memory_heap_initial__size: 1G
+      NEO4J_dbms_memory_heap_max__size: 1G
+    volumes:
+      - neo4j_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "${NEO4J_USER:-neo4j}", "-p", "${NEO4J_PASSWORD:-password}", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # PaddleOCR microservice (opcional, comentar si no se necesita)
+  ocr:
+    build:
+      context: ../../services/ocr
+      dockerfile: Dockerfile
+    container_name: aria_ocr
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+    profiles:
+      - ocr  # Activar con: docker compose --profile ocr up
+
+volumes:
+  qdrant_data:
+  redis_data:
+  postgres_data:
+  neo4j_data:
