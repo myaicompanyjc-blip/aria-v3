@@ -19,6 +19,13 @@ class DocumentAgent {
   }
 
   async query(userId, query) {
+    // Bypass: si pregunta por página específica, responder directo desde memoria
+    const pageMatch = query.match(/p[aá]gina\s*#?(\d+)/i);
+    if (pageMatch) {
+      const directPage = this._getDirectPage(userId, parseInt(pageMatch[1]), query);
+      if (directPage) return directPage;
+    }
+
     let exactResults = [];
     try {
       exactResults = await this._exactSearch(userId, query);
@@ -46,6 +53,25 @@ class DocumentAgent {
     return this._buildResult(userId, query, chunks, exactResults);
   }
 
+  _getDirectPage(userId, pageNum, query) {
+    const doc = this.memory?.getActiveDocument(userId);
+    if (!doc || !doc.pages || !doc.pages[pageNum - 1]) return null;
+
+    const pageText = doc.pages[pageNum - 1];
+    return {
+      context: `[DOCUMENTO: "${doc.title}" — Página ${pageNum}]\n${pageText}`,
+      confidence: { score: 0.9, level: 'high', reasons: ['Contenido directo de la página solicitada'] },
+      citations: `\n\n📎 Fuente: ${doc.title}, Página ${pageNum}`,
+      rawChunks: [{
+        text: pageText,
+        docTitle: doc.title,
+        pageNumber: pageNum,
+        score: 1.0,
+        chunkIndex: 0,
+      }],
+    };
+  }
+
   async _exactSearch(userId, query) {
     const rag = this.ragRetriever;
     if (rag.exactSearch) return await rag.exactSearch(userId, query) || [];
@@ -56,15 +82,28 @@ class DocumentAgent {
   }
 
   _buildResult(userId, query, chunks, exactResults) {
-    const confidence = this.confidence.decide(query, chunks, { exactResults });
+    const activeDoc = !!this.memory?.getActiveDocument(userId);
+    const confidence = this.confidence.decide(query, chunks, { exactResults, activeDoc });
     const citations = this.confidence.formatCitations(chunks, exactResults);
+
+    // Combinar chunks RAG + exactResults para citation engine
+    const exactAsChunks = exactResults.slice(0, 5).map((r, i) => ({
+      text: this._getContext(r.text, r.matchPosition || 0, 400),
+      docTitle: r.docTitle || 'Documento',
+      pageNumber: r.pageNumber || null,
+      score: 0.9,
+      chunkIndex: -i - 1,
+      startChar: r.matchPosition || null,
+      endChar: null,
+    }));
+    const allChunks = [...exactAsChunks, ...chunks];
 
     if (exactResults.length > 0) {
       return {
         context: this._formatExactResults(exactResults, query),
         confidence: confidence.confidence,
         citations,
-        rawChunks: chunks,
+        rawChunks: allChunks,
       };
     }
 
@@ -73,14 +112,14 @@ class DocumentAgent {
         context: this._formatChunks(chunks, query),
         confidence: confidence.confidence,
         citations,
-        rawChunks: chunks,
+        rawChunks: allChunks,
       };
     }
 
-    return this._fallbackFromMemory(userId, query, confidence.confidence, chunks);
+    return this._fallbackFromMemory(userId, query, confidence.confidence, chunks, allChunks);
   }
 
-  _fallbackFromMemory(userId, query, confidence, rawChunks) {
+  _fallbackFromMemory(userId, query, confidence, rawChunks, allChunks) {
     const doc = this.memory.getActiveDocument(userId);
     if (!doc) {
       return { context: '', confidence, citations: '', rawChunks };
@@ -107,6 +146,15 @@ class DocumentAgent {
       }
     }
 
+    if (!this._isGeneralDocumentQuery(query)) {
+      return {
+        context: '',
+        confidence: { score: 0.15, level: 'low', reasons: ['No se encontró soporte documental suficiente'] },
+        citations: '',
+        rawChunks,
+      };
+    }
+
     const preview = this._buildSmartPreview(doc, query);
     return {
       context: `[DOCUMENTO: "${doc.title}" (${doc.totalPages || 1} págs.) — Vista general]\n${preview}`,
@@ -114,6 +162,10 @@ class DocumentAgent {
       citations: '',
       rawChunks,
     };
+  }
+
+  _isGeneralDocumentQuery(query) {
+    return /(?:res[uú]me|resumen|de\s+qu[eé]\s+trata|vista\s+general|contenido\s+general|expl[ií]came\s+(?:el|este)\s+(?:documento|pdf|archivo)|overview)/i.test(query);
   }
 
   _buildSmartPreview(doc, query) {

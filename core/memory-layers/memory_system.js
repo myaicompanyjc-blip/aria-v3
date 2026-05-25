@@ -22,6 +22,7 @@ const path = require('path');
 const DATA_DIR = path.join(__dirname, '../../data');
 const EPISODIC_FILE = path.join(DATA_DIR, 'episodic_memory.json');
 const SKILL_FILE = path.join(DATA_DIR, 'skill_memory.json');
+const DOCUMENTS_FILE = path.join(DATA_DIR, 'document_memory.json');
 
 // ─── CAPA 1: WORKING MEMORY ──────────────────────────────────────────────────
 
@@ -342,6 +343,7 @@ class MemorySystem5Layers {
 
     // Documentos en memoria para compatibilidad con código original
     this._documents = new Map();
+    this._loadDocuments();
     this._facts = new Map(); // Alias para compatibilidad
 
     // Limpiar sesiones expiradas cada 10 min
@@ -402,6 +404,28 @@ class MemorySystem5Layers {
       if (docs.length >= 5) docs.shift(); // Mantener máx 5 docs
       docs.push({ ...docData, savedAt: Date.now() });
     }
+    this._saveDocuments();
+  }
+
+  _loadDocuments() {
+    try {
+      if (fs.existsSync(DOCUMENTS_FILE)) {
+        const raw = JSON.parse(fs.readFileSync(DOCUMENTS_FILE, 'utf8'));
+        for (const [phone, docs] of Object.entries(raw)) {
+          this._documents.set(phone, docs);
+        }
+      }
+    } catch {}
+  }
+
+  _saveDocuments() {
+    try {
+      const obj = {};
+      for (const [phone, docs] of this._documents) {
+        obj[phone] = docs;
+      }
+      fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify(obj, null, 2), 'utf8');
+    } catch {}
   }
 
   getActiveDocument(phone) {
@@ -439,7 +463,9 @@ class MemorySystem5Layers {
         const page = doc.pages[i] || '';
         const kwLower = kw.toLowerCase();
         // Búsqueda flexible: también busca palabras individuales
-        const keywords = kwLower.split(/\s+/).filter(w => w.length > 3);
+        const stopwords = new Set(['sobre', 'acerca', 'dice', 'menciona', 'contiene', 'habla', 'documento', 'archivo', 'pdf']);
+        const keywords = kwLower.split(/\s+/).filter(w => w.length > 3 && !stopwords.has(w));
+        if (keywords.length === 0) continue;
         const hasKeyword = keywords.some(word => page.toLowerCase().includes(word));
 
         if (hasKeyword) {

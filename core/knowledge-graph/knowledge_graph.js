@@ -273,7 +273,17 @@ Si no hay entidades: {"entities":[],"relations":[]}`;
 
   _ensureLoaded() {
     if (this._loaded) return;
-    try { if (fs.existsSync(GRAPH_FILE)) this._graph = JSON.parse(fs.readFileSync(GRAPH_FILE, 'utf8')); } catch { this._graph = { nodes: {}, edges: [] }; }
+    try {
+      if (fs.existsSync(GRAPH_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(GRAPH_FILE, 'utf8'));
+        this._graph = {
+          nodes: parsed.nodes || {},
+          edges: parsed.edges || [],
+        };
+      }
+    } catch {
+      this._graph = { nodes: {}, edges: [] };
+    }
     this._loaded = true;
   }
 

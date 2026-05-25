@@ -36,7 +36,7 @@ class SemanticChunker {
    */
   chunk(text, opts = {}) {
     const {
-      maxChunkSize = 1500,
+      maxChunkSize = 4000,
       overlap = 200,
       minChunkSize = 100,
       pages = null,
@@ -273,7 +273,9 @@ class VectorStore {
   async init() {
     const qdrantUrl = process.env.QDRANT_URL;
     if (!qdrantUrl) {
-      throw new Error('[RAG:VectorStore] QDRANT_URL no configurado. Qdrant es OBLIGATORIO. Ejecuta: docker compose up -d en infrastructure/docker/');
+      console.warn('[RAG:VectorStore] QDRANT_URL no configurado. Modo solo lexical.');
+      this._available = false;
+      return;
     }
     try {
       const { QdrantClient } = require('@qdrant/js-client-rest');
@@ -295,14 +297,15 @@ class VectorStore {
         console.log(`[RAG:VectorStore] Colección Qdrant '${this._collection}' creada (dim=${this._vectorDim})`);
       }
       this._available = true;
-      console.log('[RAG:VectorStore] ✅ Qdrant conectado (modo obligatorio)');
+      console.log('[RAG:VectorStore] ✅ Qdrant conectado');
     } catch (err) {
-      throw new Error(`[RAG:VectorStore] Qdrant NO disponible en ${qdrantUrl}: ${err.message}. Qdrant es OBLIGATORIO.`);
+      console.warn(`[RAG:VectorStore] Qdrant NO disponible en ${qdrantUrl}: ${err.message}. Modo solo lexical.`);
+      this._available = false;
     }
   }
 
   async upsert(userId, chunks) {
-    if (!this._available) throw new Error('VectorStore no inicializado — Qdrant requerido');
+    if (!this._available) return;
     const points = chunks.map((chunk, i) => ({
       id: this._chunkToId(userId, chunk),
       vector: chunk.embedding,
@@ -323,7 +326,7 @@ class VectorStore {
   }
 
   async searchByEmbedding(userId, queryEmbedding, topK = 20) {
-    if (!this._available) throw new Error('VectorStore no inicializado — Qdrant requerido');
+    if (!this._available) return [];
     const results = await this._client.search(this._collection, {
       vector: queryEmbedding,
       limit: topK,
@@ -429,7 +432,7 @@ class HybridRetriever {
   async indexDocument(userId, doc) {
     const chunker = new SemanticChunker();
     const chunks = chunker.chunk(doc.text, {
-      maxChunkSize: 1500,
+      maxChunkSize: 4000,
       overlap: 200,
       pages: doc.pages || null,
     });

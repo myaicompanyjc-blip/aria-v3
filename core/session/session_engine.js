@@ -88,11 +88,12 @@ class SessionEngine {
    * Actualiza la sesión con el resultado del Planner.
    * Detecta cambio de tarea para hacer context reset.
    */
-  async updateFromPlan(userId, plan, userMessage) {
+  async updateFromPlan(userId, plan, userMessage, opts = {}) {
     const session = await this.getOrCreate(userId);
+    const topicPolicy = opts.topicPolicy || null;
 
     // Detectar cambio de tarea
-    const isNewTask = this._isNewTask(session, plan, userMessage);
+    const isNewTask = this._isNewTask(session, plan, userMessage) || topicPolicy?.clearShortTerm;
     if (isNewTask) {
       console.log(`[Session] Cambio de tarea detectado para ${userId} — reseteando contexto`);
       session.shortTermMemory = [];
@@ -104,6 +105,7 @@ class SessionEngine {
       ...session,
       currentIntent: plan.intent,
       currentTask: plan.objective || session.currentTask,
+      activeTopic: topicPolicy?.activeTopic || session.activeTopic || null,
       activeTools: plan.requiredTools || [],
       updatedAt: new Date().toISOString(),
     };
@@ -149,6 +151,7 @@ class SessionEngine {
       ...session,
       currentTask: null,
       currentIntent: null,
+      activeTopic: null,
       activeTools: [],
       shortTermMemory: [],
       updatedAt: new Date().toISOString(),
@@ -165,6 +168,7 @@ class SessionEngine {
       userId,
       currentTask: null,
       currentIntent: null,
+      activeTopic: null,
       activeDocuments: [],
       activeTools: [],
       shortTermMemory: [],

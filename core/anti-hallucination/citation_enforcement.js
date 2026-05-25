@@ -32,25 +32,49 @@ class CitationEnforcementEngine {
       };
     }
 
+    // Detectar si pregunta por página específica
+    const pageMatch = query.match(/p[aá]gina\s*#?(\d+)/i);
+    const pageChunk = pageMatch ? chunks.find(c => c.pageNumber === parseInt(pageMatch[1])) : null;
+    if (pageChunk) {
+      if (pageChunk.text.length < 100) {
+        return {
+          response: pageChunk.text,
+          citations: [{
+            reference: `[Página ${pageChunk.pageNumber}]`,
+            docTitle: pageChunk.docTitle || 'Documento',
+            pageNumber: pageChunk.pageNumber,
+            excerpt: pageChunk.text.substring(0, 100),
+          }],
+          hasUncertainty: false,
+          notFoundInDoc: false,
+        };
+      }
+      // Si el texto es largo, dejar que reasoner lo procese
+      return { response: '', citations: [], hasUncertainty: false, notFoundInDoc: false };
+    }
+
     const numberedContext = this._buildNumberedContext(chunks);
 
-    const CITATION_PROMPT = `Eres ARIA, asistente empresarial. Responde la pregunta del usuario usando EXCLUSIVAMENTE la información de los fragmentos numerados.
+    const CITATION_SYSTEM = `Eres ARIA, asistente empresarial.
 
-FRAGMENTOS DE DOCUMENTOS:
+IMPORTANTE: Responde ÚNICAMENTE con tu respuesta final. NO incluyas análisis, razonamiento, ni proceso de pensamiento.
+
+Responde la pregunta usando EXCLUSIVAMENTE los fragmentos proporcionados.
+Si un dato no está en los fragmentos, dilo honestamente.
+No inventes ni extrapoles.
+Español colombiano, tono profesional.
+Respuesta breve y útil.`;
+
+    const CITATION_PROMPT = `Fragmentos:
 ${numberedContext}
 
-PREGUNTA: ${query}
+Pregunta: ${query}
 
-INSTRUCCIONES ESTRICTAS:
-1. Basa tu respuesta SOLO en los fragmentos anteriores.
-2. Al mencionar cualquier dato, cifra o hecho, agrega [F{número}] referenciando el fragmento.
-3. Si algo NO está en los fragmentos, di explícitamente: "No encontré información sobre [tema] en los documentos disponibles."
-4. No inventes datos. No extrapoles más allá de lo escrito.
-5. Responde en español colombiano, tono profesional.
-6. Respuesta directa y útil. Si el fragmento lo dice claramente, cítalo con confianza.`;
+Responde basándote SOLO en los fragmentos. Cuando menciones un dato concreto, agrega [F{número}].`;
 
     try {
       const response = await llm.chat([
+        { role: 'system', content: CITATION_SYSTEM },
         { role: 'user', content: CITATION_PROMPT }
       ], { maxTokens: 1500, temperature: 0.3 });
 

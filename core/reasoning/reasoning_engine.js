@@ -14,14 +14,28 @@
 
 const llm = require('../../lib/llm_client');
 const citationEngine = require('../anti-hallucination/citation_enforcement');
+const path = require('path');
+const fs = require('fs');
 
-// ─── REASONER v5.0 ────────────────────────────────────────────────────────────
+// ─── PROMPTS DESDE ARCHIVOS DEDICADOS ─────────────────────────────────────────
 
-const REASONER_PROMPT = `Eres el módulo Reasoner de ARIA. Tu función es generar una respuesta DRAFT de alta calidad.
-Razona paso a paso antes de responder.
-Basa tu respuesta EXCLUSIVAMENTE en la información provista en el contexto.
-Si algo no está en el contexto, admítelo claramente.
-Sé específico, útil y en español colombiano.`;
+function loadPrompt(filename, fallback) {
+  try {
+    const p = path.join(__dirname, '..', '..', 'prompts', filename);
+    if (fs.existsSync(p)) return fs.readFileSync(p, 'utf8').trim();
+  } catch {}
+  return fallback;
+}
+
+const CONVERSATION_PROMPT = loadPrompt('conversation-agent.md',
+  `Eres ARIA, asistente inteligente de Anhermer. Responde en español colombiano, con tono cálido, claro y profesional. Responde naturalmente. No uses contexto documental a menos que el usuario lo haya pedido de forma explícita.`
+);
+
+const DOCUMENT_PROMPT = loadPrompt('document-agent.md',
+  `Eres ARIA, asistente inteligente de Anhermer. Basa tu respuesta EXCLUSIVAMENTE en la información provista en el contexto. Si algo no está en el contexto, admítelo claramente.`
+);
+
+const BASE_REASONER_PROMPT = `Eres ARIA, asistente inteligente de Anhermer. Responde en español colombiano, con tono cálido, claro y profesional.`;
 
 class Reasoner {
   async think(message, context, plan, opts = {}) {
@@ -30,19 +44,24 @@ class Reasoner {
 
     if (routing.structuredOutput) return await this._thinkStructured(message, context);
 
+    let systemPrompt;
     let prompt;
     if (strategy === 'chain-of-thought') {
-      prompt = `Razona paso a paso para responder: "${message}"\n\nContexto:\n${context}\n\nPrimero piensa en voz alta (brevemente), luego da tu respuesta final.`;
+      systemPrompt = DOCUMENT_PROMPT;
+      prompt = `Responde: "${message}"\n\nContexto:\n${context}\n\nRazona internamente antes de responder. Entrega solo tu respuesta final, directa y en español colombiano.`;
     } else if (strategy === 'rag') {
-      prompt = `El usuario pregunta: "${message}"\n\nDocumentos recuperados:\n${context}\n\nResponde SOLO con información que esté en los documentos. Si no está, dilo.`;
+      systemPrompt = DOCUMENT_PROMPT;
+      prompt = `Responde: "${message}"\n\nDocumentos recuperados:\n${context}\n\nResponde SOLO con información que esté en los documentos. Si no está, dilo.`;
     } else if (strategy === 'research') {
+      systemPrompt = `${DOCUMENT_PROMPT}\n\nUsa fuentes externas cuando el contexto lo indique.`;
       prompt = `El usuario quiere saber: "${message}"\n\nResultados de búsqueda:\n${context}\n\nSintetiza la información y cita fuentes.`;
     } else {
+      systemPrompt = CONVERSATION_PROMPT;
       prompt = `Responde al usuario: "${message}"\n\nContexto relevante:\n${context}`;
     }
 
     return await llm.chat([
-      { role: 'system', content: REASONER_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: prompt }
     ], { maxTokens: 1500, temperature: opts.temperature || 0.6 });
   }
@@ -50,7 +69,7 @@ class Reasoner {
   async _thinkStructured(message, context) {
     const prompt = `El usuario pide: "${message}"\n\nContexto disponible:\n${context}\n\nProporciona la respuesta en formato estructurado (lista o tabla si aplica). Sé completo y organizado.`;
     return await llm.chat([
-      { role: 'system', content: REASONER_PROMPT + '\nCuando corresponda, usa formato de lista o tabla Markdown para mayor claridad.' },
+      { role: 'system', content: DOCUMENT_PROMPT + '\nCuando corresponda, usa formato de lista o tabla Markdown para mayor claridad.' },
       { role: 'user', content: prompt }
     ], { maxTokens: 2000, temperature: 0.4 });
   }

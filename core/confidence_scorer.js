@@ -99,6 +99,7 @@ class ConfidenceScorer {
    */
   decide(query, chunks, opts = {}) {
     const confidence = this.evaluate(query, chunks, opts);
+    const hasActiveDoc = opts.activeDoc || false;
 
     if (confidence.level === 'high') {
       return {
@@ -112,6 +113,14 @@ class ConfidenceScorer {
       return {
         shouldRespond: true,
         confidence,
+        instruction: 'responder_con_advertencia',
+      };
+    }
+
+    if (hasActiveDoc) {
+      return {
+        shouldRespond: true,
+        confidence: { ...confidence, level: 'low' },
         instruction: 'responder_con_advertencia',
       };
     }

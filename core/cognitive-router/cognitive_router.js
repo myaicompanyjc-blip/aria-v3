@@ -29,6 +29,7 @@ const PIPELINE_TYPES = {
   COMPARATIVE: 'comparative',
   DIRECT_CHAT: 'direct_chat',
   MEMORY_RECALL: 'memory_recall',
+  CRM_ACTION: 'crm_action',
 };
 
 const PIPELINE_PATTERNS = [
@@ -86,6 +87,21 @@ const PIPELINE_PATTERNS = [
     config: { structuredExtraction: true, formatAsTable: true }
   },
   {
+    pipeline: PIPELINE_TYPES.WEB_SEARCH,
+    patterns: [
+      /^!buscar\s+/i,
+      /busca\s+en\s+(internet|la\s+web|google)/i,
+      /consulta\s+(en\s+)?(internet|la\s+web|google)/i,
+      /googlea\s+/i,
+      /noticias?\s+(de|sobre|actuales|recientes)/i,
+      /clima\s+en\s+/i,
+      /temperatura\s+en\s+/i,
+      /(precio|cotizaci[oó]n|valor)\s+(actual\s+)?(del?\s+)?(d[oó]lar|euro|bitcoin|btc|trm)/i,
+      /c[oó]mo\s+est[aá]\s+(el\s+)?(d[oó]lar|euro|bitcoin|btc|trm)/i,
+    ],
+    config: { maxSources: 5, isolateFromDocuments: true }
+  },
+  {
     pipeline: PIPELINE_TYPES.WEB_RESEARCH,
     patterns: [
       /investiga\s+(sobre|acerca\s+de|el\s+tema)/i,
@@ -135,6 +151,20 @@ const PIPELINE_PATTERNS = [
     ],
     config: { comparativeReasoning: true, dualRetrieval: true }
   },
+  {
+    pipeline: PIPELINE_TYPES.CRM_ACTION,
+    patterns: [
+      /(agrega|crea|registra|nuev[oa])\s+(contacto|cliente)/i,
+      /(busca|encuentra|consulta)\s+(contacto|cliente)/i,
+      /qu[eé]\s+(negocios|clientes|contactos|deals)\s+(tengo|hay|existen|tenemos)/i,
+      /(resumen|reporte|estado)\s+(del?\s+)?crm/i,
+      /registra\s+(una\s+)?(actividad|llamada|reuni[oó]n|seguimiento)/i,
+      /(crea|abre|nueva)\s+(negociaci[oó]n|oportunidad|deal)/i,
+      /c[uú]anto\s+(llevamos|hemos\s+ganado|facturado)/i,
+      /dame\s+el\s+(reporte|resumen)\s+comercial/i,
+    ],
+    config: { useCRM: true }
+  },
 ];
 
 class CognitiveRouter {
@@ -172,15 +202,24 @@ class CognitiveRouter {
 
   _reconcileWithPlan(detected, plan, context) {
     const { intent } = plan;
-    const hasDoc = context.hasActiveDoc || false;
+
+    if (intent === 'web_search') {
+      return { type: PIPELINE_TYPES.WEB_SEARCH, config: { maxSources: 5, isolateFromDocuments: true }, reasoning: 'Plan indica web_search' };
+    }
+
+    if (intent === 'doc_query') {
+      return detected && detected.type !== PIPELINE_TYPES.WEB_SEARCH && detected.type !== PIPELINE_TYPES.WEB_RESEARCH
+        ? detected
+        : { type: PIPELINE_TYPES.DOC_EXACT_QUERY, config: { maxChunks: 6, requireCitation: true }, reasoning: 'Plan indica doc_query' };
+    }
+
+    if (intent === 'crm_action') {
+      return { type: PIPELINE_TYPES.CRM_ACTION, config: { useCRM: true }, reasoning: 'Plan indica crm_action' };
+    }
+
     if (detected) {
-      if (hasDoc && detected.type === PIPELINE_TYPES.WEB_SEARCH) {
-        return { ...detected, type: PIPELINE_TYPES.DOC_EXACT_QUERY, reasoning: 'Redirigido a doc_exact por documento activo' };
-      }
       return detected;
     }
-    if (intent === 'doc_query') return { type: PIPELINE_TYPES.DOC_EXACT_QUERY, config: { maxChunks: 6, requireCitation: true }, reasoning: 'Plan indica doc_query' };
-    if (intent === 'web_search') return { type: PIPELINE_TYPES.WEB_SEARCH, config: { maxSources: 5 }, reasoning: 'Plan indica web_search' };
     return { type: PIPELINE_TYPES.DIRECT_CHAT, config: {}, reasoning: 'Conversación directa' };
   }
 

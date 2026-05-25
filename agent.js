@@ -104,16 +104,22 @@ async function connectWhatsApp(memory) {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
       const qrcode = require('qrcode-terminal');
+      const QRCode = require('qrcode');
       console.log('\n🔐 Escanea este código QR con WhatsApp:');
       qrcode.generate(qr, { small: true });
+      const qrPath = path.join(__dirname, 'whatsapp', 'qr-aria.png');
+      QRCode.toFile(qrPath, qr, { type: 'png', width: 400 }, () => {});
+      console.log(`📷 QR guardado en: ${qrPath}`);
       console.log('\n📱 Abre WhatsApp > Menú > WhatsApp Web > Escanear código\n');
     }
     if (connection === 'close') {
-      const shouldReconnect = (lastDisconnect?.error instanceof Boom)
-        ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
-        : true;
-      logger.warn({ shouldReconnect }, 'Conexión WhatsApp cerrada');
-      if (shouldReconnect) setTimeout(() => connectWhatsApp(memory), 3000);
+      const isLoggedOut = lastDisconnect?.error instanceof Boom
+        && lastDisconnect.error.output?.statusCode === DisconnectReason.loggedOut;
+      if (isLoggedOut) {
+        logger.info('Sesión no válida o expirada. Esperando nuevo QR...');
+      }
+      logger.warn({ isLoggedOut }, 'Conexión WhatsApp cerrada, reconectando...');
+      setTimeout(() => connectWhatsApp(memory), 3000);
     } else if (connection === 'open') {
       logger.info('✅ ARIA conectada a WhatsApp');
     }
@@ -173,6 +179,22 @@ async function connectWhatsApp(memory) {
     }
   });
 }
+
+// Qdrant health check — reconecta automáticamente cuando vuelva
+setInterval(async () => {
+  try {
+    const axios = require('axios');
+    const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333';
+    await axios.get(qdrantUrl, { timeout: 3000 });
+    if (brain?.rag?.retriever?.vectorStore && !brain.rag.retriever.vectorStore._available) {
+      logger.info('Qdrant detectado, reconectando...');
+      await brain.rag.retriever.vectorStore.init();
+      if (brain.rag.retriever.vectorStore._available) {
+        logger.info('✅ Qdrant reconectado');
+      }
+    }
+  } catch {}
+}, 30000);
 
 // Graceful shutdown
 process.on('SIGINT', async () => {

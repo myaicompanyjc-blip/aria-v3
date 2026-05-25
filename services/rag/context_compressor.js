@@ -15,7 +15,7 @@
 
 const llm = require('../../lib/llm_client');
 
-const DEFAULT_MAX_TOKENS = 3000;
+const DEFAULT_MAX_TOKENS = 8000;
 const CHUNK_SUMMARY_THRESHOLD = 800; // chars → resumir si excede
 const SIMILARITY_FINGERPRINT_LENGTH = 100;
 

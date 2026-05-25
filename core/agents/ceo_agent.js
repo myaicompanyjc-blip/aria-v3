@@ -11,6 +11,7 @@
 
 const ResearchAgent = require('./research_agent');
 const DocumentAgent = require('./document_agent');
+const CRMAgent = require('../../agents/crm_agent');
 const cognitiveRouter = require('../cognitive-router/cognitive_router');
 
 const AGENT_TIMEOUT_MS = parseInt(process.env.AGENT_TIMEOUT_MS || '15000');
@@ -21,6 +22,7 @@ class CEOAgent {
     this.ragRetriever = ragRetriever;
     this.researchAgent = new ResearchAgent();
     this.documentAgent = new DocumentAgent(memory, ragRetriever);
+    this.crmAgent = new CRMAgent();
   }
 
   async orchestrate(userId, message, plan, opts = {}) {
@@ -47,6 +49,14 @@ class CEOAgent {
       );
       jobs.push(webJob.then(result => ({ type: 'research', ...result })));
       agentsUsed.push('research');
+    }
+
+    if (intent === 'crm_action' || routing.pipeline === 'crm_action') {
+      const crmContext = this._runCRMAgent(message, userId);
+      agentsUsed.push('crm');
+      if (crmContext) {
+        return { enrichedContext: crmContext, agentsUsed, confidence: { level: 'high' }, citations: '', chunks: [] };
+      }
     }
 
     if (jobs.length === 0) {
@@ -99,6 +109,32 @@ class CEOAgent {
     } catch (err) {
       console.warn(`[CEO] ${agentName} falló/timeout:`, err.message);
       return { context: '', confidence: null, citations: '', chunks: [] };
+    }
+  }
+
+  _runCRMAgent(message, userId) {
+    try {
+      const lower = message.toLowerCase();
+
+      const addContactMatch = message.match(/(?:agrega|crea|registra|nuev[oa])\s+(?:el\s+)?(?:contacto|cliente)\s+(.+?)(?:\s+(?:con|en|que)\s+|$)/i);
+      if (addContactMatch) {
+        const name = addContactMatch[1].trim();
+        if (name.length > 2) {
+          this.crmAgent.addContact({ name, userId, notes: `Creado por ARIA: ${message.substring(0, 100)}` });
+          return `[CRM] He creado el contacto "${name}". ¿Quieres agregar más detalles (teléfono, email, empresa)?`;
+        }
+      }
+
+      const summary = this.crmAgent.getDealsSummary(userId);
+      const context = this.crmAgent.formatForLLM(userId);
+      if (context) {
+        return `[CRM - Contexto comercial del usuario]\n${context}\n\n[Resumen]\nTotal negociaciones: ${summary.total} | Pipeline: $${summary.pipelineValue.toLocaleString()} | Cerrados ganados: $${summary.wonValue.toLocaleString()}`;
+      }
+
+      return '';
+    } catch (err) {
+      console.warn('[CEO] CRMAgent falló:', err.message);
+      return '';
     }
   }
 

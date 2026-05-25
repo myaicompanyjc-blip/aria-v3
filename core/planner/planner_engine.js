@@ -11,6 +11,7 @@
  */
 
 const llm = require('../../lib/llm_client');
+const intentClassifier = require('../intent_classifier');
 
 // Estrategias de razonamiento disponibles
 const REASONING_STRATEGIES = {
@@ -25,10 +26,17 @@ const REASONING_STRATEGIES = {
 
 const PLANNING_SYSTEM_PROMPT = `Eres el planificador de ARIA. Solo produces JSON. Sin explicaciones, sin markdown, sin texto extra.
 Campos requeridos: objective, intent, reasoningStrategy, requiredTools, estimatedComplexity.
-intent: conversation|doc_query|web_search|image_generate|help
+intent: conversation|doc_query|web_search|image_generate|crm_action|help
 reasoningStrategy: direct|chain-of-thought|rag|research
-requiredTools: ["rag","web_search","ocr","stt"]
+requiredTools: ["rag","web_search","ocr","stt","crm"]
 estimatedComplexity: low|medium|high
+
+Reglas críticas:
+- Un documento activo NO significa que debas usar RAG.
+- Usa doc_query solo si el usuario pide explícitamente documento/pdf/archivo/página, o si continúa claramente una consulta documental.
+- Preguntas de actualidad, dólar, clima, precios, noticias o internet son web_search aunque exista un documento activo.
+- Saludos, identidad y capacidades son conversation/help sin RAG.
+- CRM: agregar/buscar contactos, consultar negociaciones, reporte comercial son crm_action.
 
 Ejemplo: {"objective":"responder salud","intent":"conversation","reasoningStrategy":"direct","requiredTools":[],"estimatedComplexity":"low"}`;
 
@@ -82,6 +90,8 @@ class PlannerEngine {
    */
   _fastPlan(message, context) {
     const msg = message.trim().toLowerCase();
+    const hasActiveDoc = this._hasActiveDocument(context);
+    const classified = intentClassifier.classify(message);
 
     // Comandos exactos
     const exactCommands = {
@@ -99,6 +109,36 @@ class PlannerEngine {
         reasoningStrategy: cmd.strategy,
         requiredTools: cmd.tools,
         estimatedComplexity: 'low',
+      });
+    }
+
+    if (this._isCapabilityQuestion(message)) {
+      return this._buildPlan({
+        objective: 'Explicar capacidades de ARIA sin usar contexto documental',
+        intent: 'help',
+        reasoningStrategy: REASONING_STRATEGIES.DIRECT,
+        requiredTools: [],
+        estimatedComplexity: 'low',
+      });
+    }
+
+    if (this._isExplicitWebQuery(message) || classified.id === 'web_search') {
+      return this._buildPlan({
+        objective: 'Buscar o responder información actual en la web',
+        intent: 'web_search',
+        reasoningStrategy: REASONING_STRATEGIES.RESEARCH,
+        requiredTools: ['web_search'],
+        estimatedComplexity: 'medium',
+      });
+    }
+
+    if (this._isExplicitDocQuery(message) || classified.id === 'doc_query') {
+      return this._buildPlan({
+        objective: 'Responder consulta sobre documento activo',
+        intent: 'doc_query',
+        reasoningStrategy: REASONING_STRATEGIES.RAG,
+        requiredTools: ['rag'],
+        estimatedComplexity: 'medium',
       });
     }
 
@@ -124,6 +164,30 @@ class PlannerEngine {
       });
     }
 
+    if (hasActiveDoc && this._isDocumentContinuation(message, context)) {
+      return this._buildPlan({
+        objective: 'Continuar consulta documental activa',
+        intent: 'doc_query',
+        reasoningStrategy: REASONING_STRATEGIES.RAG,
+        requiredTools: ['rag'],
+        estimatedComplexity: 'medium',
+      });
+    }
+
+    // Patrones CRM
+    if (/(?:agrega|crea|registra|nuev[oa])\s+(?:contacto|cliente)/i.test(message) ||
+        /qué\s+(?:negocios|clientes|contactos|deals)\s+(?:tengo|hay)/i.test(message) ||
+        /(?:resumen|reporte)\s+(?:del\s+)?crm/i.test(message) ||
+        /registra\s+(?:una\s+)?(?:actividad|llamada|reuni[oó]n)/i.test(message)) {
+      return this._buildPlan({
+        objective: 'Gestionar CRM',
+        intent: 'crm_action',
+        reasoningStrategy: REASONING_STRATEGIES.DIRECT,
+        requiredTools: ['crm'],
+        estimatedComplexity: 'low',
+      });
+    }
+
     return null; // No hay fast-plan → usar LLM
   }
 
@@ -136,7 +200,11 @@ class PlannerEngine {
     let tools = [];
     let strategy = REASONING_STRATEGIES.DIRECT;
 
-    if (/p[aá]gina\s*\d+|qu[eé]\s+dice\s+el\s+documento/i.test(message)) {
+    if (this._isExplicitWebQuery(message)) {
+      intent = 'web_search';
+      tools = ['web_search'];
+      strategy = REASONING_STRATEGIES.RESEARCH;
+    } else if (this._isExplicitDocQuery(message)) {
       intent = 'doc_query';
       tools = ['rag'];
       strategy = REASONING_STRATEGIES.RAG;
@@ -144,6 +212,10 @@ class PlannerEngine {
       intent = 'web_search';
       tools = ['web_search'];
       strategy = REASONING_STRATEGIES.RESEARCH;
+    } else if (/(?:agrega|crea|registra)\s+(?:contacto|cliente)/i.test(message) || /resumen\s+crm/i.test(message)) {
+      intent = 'crm_action';
+      tools = ['crm'];
+      strategy = REASONING_STRATEGIES.DIRECT;
     } else if (/genera\s+(?:una?\s+)?imagen|crea\s+(?:una?\s+)?foto/i.test(message)) {
       intent = 'image_generate';
       tools = ['image_generator'];
@@ -152,8 +224,8 @@ class PlannerEngine {
       strategy = REASONING_STRATEGIES.CHAIN_OF_THOUGHT;
     }
 
-    // Siempre verificar si hay documentos activos (aunque el regex no matchee)
-    if (this._hasActiveDocument(context)) {
+    // Un documento activo solo habilita continuación documental, no RAG global.
+    if (intent === 'conversation' && this._hasActiveDocument(context) && this._isDocumentContinuation(message, context)) {
       intent = 'doc_query';
       tools.push('rag');
       strategy = REASONING_STRATEGIES.RAG;
@@ -275,6 +347,27 @@ class PlannerEngine {
     }
 
     return parts.length > 0 ? parts.join('\n') : 'Sin contexto previo significativo.';
+  }
+
+  _isCapabilityQuestion(message) {
+    return /^(?:qu[eé]\s+puedes\s+hacer|qu[eé]\s+sabes\s+hacer|c[oó]mo\s+funcionas|ayuda|help|comandos?)[\s?!.]*$/i.test(message.trim());
+  }
+
+  _isExplicitWebQuery(message) {
+    return /(?:^!buscar\s+|busca\s+en\s+(?:internet|la\s+web|google)|consulta\s+(?:en\s+)?(?:internet|la\s+web|google)|googlea|noticias?|clima\s+en|temperatura\s+en|d[oó]lar|euro|bitcoin|btc|trm|precio\s+(?:actual|del?|de la)|cotizaci[oó]n|actualmente|reciente|[uú]ltima\s+hora)/i.test(message);
+  }
+
+  _isExplicitDocQuery(message) {
+    return /(?:^!doc\s+|p[aá]gina\s*#?\d+|cl[aá]usula\s*\d+|art[ií]culo\s*\d+|secci[oó]n\s*\d+|(?:documento|pdf|archivo|contrato|informe)\b|seg[uú]n\s+(?:el|este|la)\s+(?:documento|pdf|archivo|contrato|informe)|en\s+(?:el|este|la)\s+(?:documento|pdf|archivo|contrato|informe)|res[uú]me(?:me)?\s+(?:el|este|la)\s+(?:documento|pdf|archivo|contrato|informe))/i.test(message);
+  }
+
+  _isDocumentContinuation(message, context = {}) {
+    const previousIntent = context.session?.currentIntent;
+    if (previousIntent !== 'doc_query') return false;
+    if (this._isExplicitWebQuery(message) || this._isCapabilityQuestion(message)) return false;
+    if (intentClassifier.isGreeting(message)) return false;
+
+    return /(?:qu[eé]\s+(?:dice|menciona|habla|indica|establece)|sobre\s+|acerca\s+de|busca|encuentra|res[uú]me(?:lo|me)?|expl[ií]came|compara|lista|extrae|y\s+(?:eso|ah[ií]|all[ií])|esa\s+p[aá]gina|ese\s+punto)/i.test(message);
   }
 
   /**

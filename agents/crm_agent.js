@@ -17,7 +17,7 @@ class CRMAgent {
     this._loaded = false;
     this._dirty = false;
     this._saveTimer = null;
-    this._load();
+    this._ensureLoaded();
   }
 
   // ─── CONTACTOS ──────────────────────────────────────────────────────────────

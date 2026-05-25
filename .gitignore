@@ -4,4 +4,8 @@ temp/
 storage/
 .env
 *.log
+.DS_Store
+whatsapp/sessions/
 .whatsapp/sessions/
+*.sqlite
+*.sqlite3
